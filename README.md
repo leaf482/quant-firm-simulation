@@ -1,8 +1,8 @@
 # quant-firm-simulation
 
 A Go learning project for trading-system engineering. Currently implements
-Tasks 1–3: a CLI bootstrap with paper-only configuration validation,
-minimal domain contracts, and a deterministic CSV quote replay reader.
+Tasks 1–4: a CLI bootstrap with paper-only configuration validation,
+minimal domain contracts, a deterministic CSV quote replay reader, and a toy strategy.
 
 ## Requirements
 
@@ -80,6 +80,30 @@ row 1; blank lines are ignored following `encoding/csv` behavior.
 
 The CLI remains the startup-only bootstrap; replay is not wired into it yet.
 
+## Toy strategy
+
+`strategy.NewPriceMovement() *PriceMovement` creates a single-symbol strategy.
+`(*PriceMovement).OnQuote(domain.Quote) (*domain.OrderIntent, error)` validates
+the quote and compares its midpoint with the previous rounded midpoint.
+The first quote produces no signal; a rise produces BUY, a fall produces SELL,
+and an unchanged midpoint produces no signal. Every intent has quantity 1 and
+copies the quote's symbol and timestamp, then passes domain validation.
+
+Midpoints use `bid + (ask - bid) / 2`, which avoids overflow for validated prices.
+Integer division rounds down to $0.0001; sub-unit midpoint changes may therefore
+produce no signal. No floating-point arithmetic is used.
+
+IDs are `price-movement-1`, `price-movement-2`, and so on, incrementing only for
+generated intents. Replaying the same sequence through a fresh instance produces
+the same IDs. IDs are unique only within a run; state persistence and retry
+deduplication are deferred. Sequence exhaustion returns an error instead of wrapping.
+
+The first valid quote selects the symbol; later symbol changes are rejected.
+Errors leave strategy state unchanged. Quotes are processed in caller-supplied
+order; timestamp ordering remains the replay reader's responsibility.
+The strategy is educational, has no position awareness, and is not connected to
+replay, the CLI, or execution components.
+
 See [the Phase 1 plan](outputs/phase-1-plan.md) for the implementation order.
-Strategy, risk, order management, paper execution, portfolio/PnL,
+Risk, order management, paper execution, portfolio/PnL,
 integration/observability, and journal/recovery are future tasks.

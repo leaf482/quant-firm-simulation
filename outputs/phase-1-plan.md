@@ -1,4 +1,4 @@
-# Phase 1 proposal — Tasks 1–3 approved
+# Phase 1 proposal — Tasks 1–4 approved
 
 ## Repository inspection
 
@@ -42,7 +42,7 @@ Structured logs and a final run summary expose the flow.
 1. **Domain:** typed quotes, intents, orders, fills, IDs, fixed-point values, and state-transition rules. No I/O or strategy rules.
 2. **Market data:** parse and validate CSV records; provide stable source IDs and ordered events. No trading decisions.
 3. **Engine:** own all mutable state; sequence events; supply immutable snapshots; orchestrate risk, OMS, broker, and accounting. Inject the clock and process one event to completion before the next.
-4. **Strategy:** consume market events and portfolio snapshots; return zero or more intents. No broker, persistence, or ledger access. Start with a stateless fixture strategy so recovery requires no hidden strategy state.
+4. **Strategy:** consume validated quotes and return at most one intent. PriceMovement stores the selected symbol, previous rounded midpoint, and intent sequence. No broker, persistence, portfolio, or ledger access. Task 10 must recover this strategy state.
 5. **Risk:** reject invalid sizes, unsupported symbols, stale data, insufficient cash/holdings, and configured order/position limits. Include outstanding reservations and estimated fees. Approval and reservation happen together before submission.
 6. **Order management (OMS):** map stable intent IDs to order IDs; enforce lifecycle; deduplicate retries; retain rejections and submission outcomes; release reservations once on terminal outcomes. Initial states: pending submission, accepted, filled, rejected, expired. A risk rejection records an intent outcome without submitting an order.
 7. **Paper broker:** accept only approved orders, deduplicate submissions by order ID, and produce deterministic next-quote fills or terminal failures. Never access a real broker. Retries return the existing outcome; they do not create fresh orders.
@@ -51,7 +51,7 @@ Structured logs and a final run summary expose the flow.
 
 ## Reliability contract
 
-Journal persistence, recovery, and crash/restart verification are introduced in Task 10, after the basic in-memory trading flow works. The durability and recovery requirements below describe the completed Phase 1 system; earlier tasks do not provide crash durability. Tasks 1–3 are currently approved for implementation.
+Journal persistence, recovery, and crash/restart verification are introduced in Task 10, after the basic in-memory trading flow works. The durability and recovery requirements below describe the completed Phase 1 system; earlier tasks do not provide crash durability. Tasks 1–4 are currently approved for implementation.
 
 Use a local append-only journal as the recovery source, separate from diagnostic logs. Each committed record contains the input identity, resulting domain events/state changes, reservations, generated IDs, and consumed CSV cursor. On restart, apply recorded transitions without invoking the strategy again; then continue at the next input record using the same configuration and input fingerprint.
 
@@ -95,7 +95,7 @@ Use Go's standard configuration, CSV, and structured logging facilities where su
 1. **Bootstrap:** create the Go module and minimal CLI in the existing Git repository, validate paper-only configuration, and document build/test/run commands. Acceptance: tests pass, invalid configuration is rejected, and the executable prints a PAPER startup message. No trading components are implemented.
 2. **Define minimal domain contracts:** implement Symbol, Price, Quantity, Side, Quote, OrderIntent, and IntentID only. Use int64 prices in units of $0.0001, strict decimal parsing and formatting, whole-share quantities, and validation. Acceptance: parsing/formatting boundary tests and quote, quantity, and intent validation tests pass. Arithmetic, event envelopes, order lifecycle, and cost/fee accounting are deferred to the components that need them.
 3. **CSV market-data replay:** read the exact timestamp,symbol,bid,ask schema sequentially into validated domain quotes. Acceptance: invalid rows report their CSV record number, timestamps cannot move backwards, equal timestamps retain file order, and completion returns EOF without wall-clock timing. Source IDs, deduplication, and identity conflict detection are deferred; the current schema has no identity field and repeated valid rows are replayed in file order.
-4. **Toy strategy:** define the strategy contract and a stateless educational fixture that emits deterministic intents without execution access. Acceptance: known quotes and snapshots produce expected intents without future data.
+4. **Toy strategy:** implement a stateful PriceMovement type that compares consecutive integer midpoints and emits deterministic one-share BUY/SELL intents on rises/falls. The first quote and equal midpoints produce no signal. Acceptance: known sequences, rounding/overflow boundaries, validation, and deterministic run-local IDs pass tests. No replay or CLI integration.
 5. **Risk:** validate limits, holdings, cash, fees, and freshness with pending reservations included. Acceptance: multiple outstanding intents cannot reuse reserved resources; rejection changes no holdings.
 6. **Order management:** track intent-to-order identity, submission state, terminal outcomes, and reservation release in memory. Acceptance: duplicate intents/submissions and terminal events retain one order and release capacity once; no path bypasses risk.
 7. **Paper broker:** implement next-quote full fills, affordability recheck, deterministic fill IDs, and EOF expiration. Acceptance: no same-quote fills, no duplicate fills, no negative cash/short positions, and explicit results for price gaps.
