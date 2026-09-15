@@ -1,4 +1,4 @@
-# Phase 1 proposal — Task 1 approved
+# Phase 1 proposal — Tasks 1 and 2 approved
 
 ## Repository inspection
 
@@ -51,7 +51,7 @@ Structured logs and a final run summary expose the flow.
 
 ## Reliability contract
 
-Journal persistence, recovery, and crash/restart verification are introduced in Task 10, after the basic in-memory trading flow works. The durability and recovery requirements below describe the completed Phase 1 system; earlier tasks do not provide crash durability. Only Task 1 is currently approved for implementation.
+Journal persistence, recovery, and crash/restart verification are introduced in Task 10, after the basic in-memory trading flow works. The durability and recovery requirements below describe the completed Phase 1 system; earlier tasks do not provide crash durability. Tasks 1 and 2 are currently approved for implementation.
 
 Use a local append-only journal as the recovery source, separate from diagnostic logs. Each committed record contains the input identity, resulting domain events/state changes, reservations, generated IDs, and consumed CSV cursor. On restart, apply recorded transitions without invoking the strategy again; then continue at the next input record using the same configuration and input fingerprint.
 
@@ -93,7 +93,7 @@ Use Go's standard configuration, CSV, and structured logging facilities where su
 ## First 10 tasks, in implementation order
 
 1. **Bootstrap:** create the Go module and minimal CLI in the existing Git repository, validate paper-only configuration, and document build/test/run commands. Acceptance: tests pass, invalid configuration is rejected, and the executable prints a PAPER startup message. No trading components are implemented.
-2. **Define domain contracts:** implement IDs, fixed-point arithmetic, event envelope, order lifecycle, and cost/fee rounding. Acceptance: boundary/overflow tests and invalid-transition tests pass.
+2. **Define minimal domain contracts:** implement Symbol, Price, Quantity, Side, Quote, OrderIntent, and IntentID only. Use int64 prices in units of $0.0001, strict decimal parsing and formatting, whole-share quantities, and validation. Acceptance: parsing/formatting boundary tests and quote, quantity, and intent validation tests pass. Arithmetic, event envelopes, order lifecycle, and cost/fee accounting are deferred to the components that need them.
 3. **CSV market-data replay:** parse and validate CSV records with stable identities and deterministic ordering. Acceptance: invalid, duplicate, conflicting, and out-of-order records behave as specified, and fixtures replay deterministically.
 4. **Toy strategy:** define the strategy contract and a stateless educational fixture that emits deterministic intents without execution access. Acceptance: known quotes and snapshots produce expected intents without future data.
 5. **Risk:** validate limits, holdings, cash, fees, and freshness with pending reservations included. Acceptance: multiple outstanding intents cannot reuse reserved resources; rejection changes no holdings.
