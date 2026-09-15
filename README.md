@@ -1,8 +1,8 @@
 # quant-firm-simulation
 
 A Go learning project for trading-system engineering. Currently implements
-Tasks 1–4: a CLI bootstrap with paper-only configuration validation,
-minimal domain contracts, a deterministic CSV quote replay reader, and a toy strategy.
+Tasks 1–5: a CLI bootstrap with paper-only configuration validation,
+minimal domain contracts, CSV quote replay, a toy strategy, and a pre-trade risk checker.
 
 ## Requirements
 
@@ -104,6 +104,28 @@ order; timestamp ordering remains the replay reader's responsibility.
 The strategy is educational, has no position awareness, and is not connected to
 replay, the CLI, or execution components.
 
+## Pre-trade risk
+
+`risk.NewChecker(risk.Limits) (*risk.Checker, error)` requires positive
+`MaxOrderNotional` and `MaxPosition`. Call
+`Check(intent, quote, availableCash, currentPosition) error` for each decision.
+Cash and total notional use `domain.Price`'s $0.0001 units; position is whole
+shares of the supplied symbol. Account values may be zero but not negative.
+
+The checker validates both domain inputs and requires matching symbols.
+BUY uses ask times quantity and rejects costs above cash or maximum order
+notional, or a resulting position above maximum position. Equality is allowed.
+SELL uses bid times quantity and rejects quantities above holdings. The BUY
+limits do not prevent a SELL from reducing an existing position above limits.
+Both sides reject notional overflow before multiplication. Position comparison
+uses remaining capacity instead of adding quantities, avoiding addition overflow.
+
+`nil` means approved; a contextual error describes the first rejection.
+Checks do not mutate state or reserve cash/shares, so repeated approvals do not
+consume resources. The caller supplies the current quote and account snapshot;
+freshness, fees, reservations, and execution integration are deferred.
+No additional domain arithmetic API or money library was needed.
+
 See [the Phase 1 plan](outputs/phase-1-plan.md) for the implementation order.
-Risk, order management, paper execution, portfolio/PnL,
+Order management, paper execution, portfolio/PnL,
 integration/observability, and journal/recovery are future tasks.

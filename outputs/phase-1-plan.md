@@ -1,4 +1,4 @@
-# Phase 1 proposal — Tasks 1–4 approved
+# Phase 1 proposal — Tasks 1–5 approved
 
 ## Repository inspection
 
@@ -51,7 +51,7 @@ Structured logs and a final run summary expose the flow.
 
 ## Reliability contract
 
-Journal persistence, recovery, and crash/restart verification are introduced in Task 10, after the basic in-memory trading flow works. The durability and recovery requirements below describe the completed Phase 1 system; earlier tasks do not provide crash durability. Tasks 1–4 are currently approved for implementation.
+Journal persistence, recovery, and crash/restart verification are introduced in Task 10, after the basic in-memory trading flow works. The durability and recovery requirements below describe the completed Phase 1 system; earlier tasks do not provide crash durability. Tasks 1–5 are currently approved for implementation.
 
 Use a local append-only journal as the recovery source, separate from diagnostic logs. Each committed record contains the input identity, resulting domain events/state changes, reservations, generated IDs, and consumed CSV cursor. On restart, apply recorded transitions without invoking the strategy again; then continue at the next input record using the same configuration and input fingerprint.
 
@@ -96,7 +96,7 @@ Use Go's standard configuration, CSV, and structured logging facilities where su
 2. **Define minimal domain contracts:** implement Symbol, Price, Quantity, Side, Quote, OrderIntent, and IntentID only. Use int64 prices in units of $0.0001, strict decimal parsing and formatting, whole-share quantities, and validation. Acceptance: parsing/formatting boundary tests and quote, quantity, and intent validation tests pass. Arithmetic, event envelopes, order lifecycle, and cost/fee accounting are deferred to the components that need them.
 3. **CSV market-data replay:** read the exact timestamp,symbol,bid,ask schema sequentially into validated domain quotes. Acceptance: invalid rows report their CSV record number, timestamps cannot move backwards, equal timestamps retain file order, and completion returns EOF without wall-clock timing. Source IDs, deduplication, and identity conflict detection are deferred; the current schema has no identity field and repeated valid rows are replayed in file order.
 4. **Toy strategy:** implement a stateful PriceMovement type that compares consecutive integer midpoints and emits deterministic one-share BUY/SELL intents on rises/falls. The first quote and equal midpoints produce no signal. Acceptance: known sequences, rounding/overflow boundaries, validation, and deterministic run-local IDs pass tests. No replay or CLI integration.
-5. **Risk:** validate limits, holdings, cash, fees, and freshness with pending reservations included. Acceptance: multiple outstanding intents cannot reuse reserved resources; rejection changes no holdings.
+5. **Risk:** implement a side-effect-free checker against a supplied quote, available cash, held quantity, and positive limits. BUY uses ask and checks cash, maximum order notional, and maximum position; SELL uses bid and checks holdings. Validate inputs and reject arithmetic overflow. Acceptance: boundary, rejection, and no-mutation tests pass. Reservations, fees, freshness checks, and integration are deferred.
 6. **Order management:** track intent-to-order identity, submission state, terminal outcomes, and reservation release in memory. Acceptance: duplicate intents/submissions and terminal events retain one order and release capacity once; no path bypasses risk.
 7. **Paper broker:** implement next-quote full fills, affordability recheck, deterministic fill IDs, and EOF expiration. Acceptance: no same-quote fills, no duplicate fills, no negative cash/short positions, and explicit results for price gaps.
 8. **Portfolio / PnL:** apply fills idempotently, calculate average cost and realized/unrealized PnL, and mark quotes. Acceptance: hand-calculated buy/sell/fee examples reconcile; duplicate fills leave balances unchanged.

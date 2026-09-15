@@ -3,7 +3,7 @@
 ## Purpose and current scope
 - Build a personal learning project about trading-system engineering, not profit optimization.
 - Production code uses Go. Phase 1 is paper trading only in one process.
-- The architecture and task order are recorded in `outputs/phase-1-plan.md`. Tasks 1–4 (through the toy strategy) are approved; subsequent implementation tasks require user approval.
+- The architecture and task order are recorded in `outputs/phase-1-plan.md`. Tasks 1–5 (through the risk checker) are approved; subsequent implementation tasks require user approval.
 - Do not implement live trading, broker credentials, or a configuration switch that enables live execution. Never enable live trading automatically.
 - Do not make financial decisions for the user. Strategies and parameters are educational fixtures, not recommendations.
 
@@ -11,7 +11,7 @@
 - Keep the system simple. Use a modular monolith; avoid services, distributed queues, speculative abstractions, and performance work without evidence.
 - Modify only what is necessary for the current task. Explain dependencies before expanding scope.
 - Separate strategy decisions from risk, order management, broker execution, and accounting. Strategies emit intents and never call brokers.
-- All new orders must pass risk checks before submission. Reserve capacity for outstanding orders so repeated intents cannot overspend or exceed limits.
+- All new orders must pass risk checks before submission. Task 5 checks supplied snapshots only; reservations are deferred. Before submission is implemented, reserve capacity for outstanding orders so repeated intents cannot overspend or exceed limits.
 - Every order-related operation must account for duplicate events and retries, including intents, submissions, rejections, fills, and recovery.
 - Use stable event, intent, order, and fill IDs. Retrying an operation must reuse its identity; conflicting payloads for the same ID must fail visibly.
 - Apply each fill to cash, positions, and realized PnL at most once. Never promise exactly-once delivery.
