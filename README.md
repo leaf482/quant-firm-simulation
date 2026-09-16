@@ -1,8 +1,8 @@
 # quant-firm-simulation
 
 A Go learning project for trading-system engineering. Currently implements
-Tasks 1–6: a CLI bootstrap with paper-only configuration validation,
-domain contracts, CSV quote replay, a toy strategy, a risk checker, and an in-memory OMS.
+Tasks 1–7: a CLI bootstrap with paper-only configuration validation,
+domain contracts, CSV replay, a toy strategy, risk checks, an OMS, and a paper broker.
 
 ## Requirements
 
@@ -138,7 +138,7 @@ and `OrderStatus.Validate()` reject invalid values.
 `Transition(domain.OrderID, domain.OrderStatus) (domain.Order, error)` allows:
 
 - NEW -> SUBMITTED or REJECTED
-- SUBMITTED -> CANCELLED or REJECTED
+- SUBMITTED -> CANCELLED, REJECTED, or FILLED
 - Any state -> itself (idempotent success)
 
 Unknown order IDs, unsupported statuses, and other transitions return errors.
@@ -151,6 +151,25 @@ Returned orders are copies. IDs are local to the manager run; exhaustion fails
 without wrapping. Invalid requests do not consume IDs or change managed orders.
 There is no persistence, reservation handling, risk recheck, or component wiring.
 
+## Paper broker
+
+`paper.NewBroker() *Broker` creates a single-threaded in-memory broker.
+`Execute(domain.Order, domain.Quote) (domain.Fill, error)` requires a valid
+SUBMITTED order and valid matching-symbol quote. BUY fills the entire quantity
+at ask; SELL fills at bid. Fill time is the quote timestamp. There are no fees,
+slippage, partial fills, timers, or next-quote scheduling.
+
+`domain.FillID`, `domain.Fill`, and `Fill.Validate()` describe and validate the
+execution. IDs are `fill-1`, `fill-2`, etc., unique within one broker run.
+Matching retries return the original fill, even if the supplied quote changed.
+Reuse of an OrderID with different IntentID, symbol, side, quantity, or creation
+instant is rejected. Duplicate calls do not advance IDs. All calls, including
+retries, require valid inputs and SUBMITTED status; FILLED orders are rejected.
+
+The broker returns copies and never calls the OMS or changes account state.
+The future caller is responsible for applying the returned fill and requesting
+the OMS transition to FILLED. Components are not wired together yet.
+
 See [the Phase 1 plan](outputs/phase-1-plan.md) for the implementation order.
-Paper execution, portfolio/PnL,
+Portfolio/PnL,
 integration/observability, and journal/recovery are future tasks.

@@ -1,4 +1,4 @@
-# Phase 1 proposal — Tasks 1–6 approved
+# Phase 1 proposal — Tasks 1–7 approved
 
 ## Repository inspection
 
@@ -34,8 +34,8 @@ Structured logs and a final run summary expose the flow.
 - Market orders only; no cancel/replace API, partial fills, corporate actions, or external brokerage integrations in this phase.
 - A toy strategy emits deterministic intents for plumbing tests. Its parameters and paper starting cash are explicit fixture inputs, not financial advice or optimized defaults.
 - Data records include stable identity, UTC time, symbol, bid, and ask. Validate positive prices, bid <= ask, identity conflicts, and ordering. Freshness uses simulated time during replay.
-- Fill an accepted order on the next valid quote, buys at ask and sells at bid, only if it remains within reserved cash/position capacity and configured limits. Otherwise reject the unfilled order with a reason and release its reservation. Use full fills with explicitly configured fees; this deliberately omits liquidity and queue modeling.
-- A quote first resolves previously accepted orders, then marks the portfolio, then reaches the strategy. An order generated from that quote cannot fill on the same quote. EOF closes outstanding orders as unfilled and releases reservations through recorded terminal transitions.
+- Task 7 fills a valid SUBMITTED order immediately using the caller's current quote: buys at ask and sells at bid, in full, with no fees, slippage, latency, or account checks inside the broker. This supersedes the original next-quote execution proposal.
+- The broker does not schedule quotes, queue orders, or expire orders at EOF. Integration and account/reservation handling are deferred; the eventual caller chooses the quote and updates OMS/account state after receiving a fill.
 
 ## Components and responsibilities
 
@@ -44,14 +44,14 @@ Structured logs and a final run summary expose the flow.
 3. **Engine:** own all mutable state; sequence events; supply immutable snapshots; orchestrate risk, OMS, broker, and accounting. Inject the clock and process one event to completion before the next.
 4. **Strategy:** consume validated quotes and return at most one intent. PriceMovement stores the selected symbol, previous rounded midpoint, and intent sequence. No broker, persistence, portfolio, or ledger access. Task 10 must recover this strategy state.
 5. **Risk:** reject invalid sizes, unsupported symbols, stale data, insufficient cash/holdings, and configured order/position limits. Include outstanding reservations and estimated fees. Approval and reservation happen together before submission.
-6. **Order management (OMS):** map stable intent IDs to deterministic order IDs and deduplicate matching retries; reject conflicting payloads. Task 6 states are NEW, SUBMITTED, CANCELLED, and REJECTED, with explicit transitions. Creation assumes prior risk approval. Submission is a state change only; broker calls, fills, and reservation handling are deferred.
-7. **Paper broker:** accept only approved orders, deduplicate submissions by order ID, and produce deterministic next-quote fills or terminal failures. Never access a real broker. Retries return the existing outcome; they do not create fresh orders.
+6. **Order management (OMS):** map stable intent IDs to deterministic order IDs and deduplicate matching retries; reject conflicting payloads. States are NEW, SUBMITTED, CANCELLED, REJECTED, and FILLED. Task 7 adds SUBMITTED -> FILLED. Creation assumes prior risk approval; OMS does not call the broker or handle reservations.
+7. **Paper broker:** accept valid SUBMITTED orders and matching quotes, return deterministic full fills at current ask/bid, and deduplicate by OrderID. Conflicting order payloads fail. Return a fill without changing OMS or account state; never access a real broker.
 8. **Portfolio:** apply unique fills once; update cash, holdings, average cost, realized PnL, and fees. Mark unrealized PnL at the current midpoint, recording mark time. Define PnL as realized plus unrealized minus fees, with cost-basis rounding documented.
 9. **Journal and operations:** append ordered transition records, flush durable commits, recover state and deduplication indexes, and emit structured logs plus summary counters. No dashboard or monitoring service is needed initially.
 
 ## Reliability contract
 
-Journal persistence, recovery, and crash/restart verification are introduced in Task 10, after the basic in-memory trading flow works. The durability and recovery requirements below describe the completed Phase 1 system; earlier tasks do not provide crash durability. Tasks 1–6 are currently approved for implementation.
+Journal persistence, recovery, and crash/restart verification are introduced in Task 10, after the basic in-memory trading flow works. The durability and recovery requirements below describe the completed Phase 1 system; earlier tasks do not provide crash durability. Tasks 1–7 are currently approved for implementation.
 
 Use a local append-only journal as the recovery source, separate from diagnostic logs. Each committed record contains the input identity, resulting domain events/state changes, reservations, generated IDs, and consumed CSV cursor. On restart, apply recorded transitions without invoking the strategy again; then continue at the next input record using the same configuration and input fingerprint.
 
@@ -59,7 +59,7 @@ Journal and sync a transition before making it visible to later processing. A fa
 
 Use sequence numbers and record integrity validation. For Phase 1, an incomplete or corrupt journal stops recovery with a clear diagnostic; automatic repair and snapshots are deferred. Require a single writer per run. Include a journal schema version and reject unsupported versions. A resumed run must match its input/configuration fingerprint; an explicitly new run gets a separate journal.
 
-Risk approvals reserve cash or units before another intent is processed. Because next-quote prices may move, revalidate fill affordability and limits before committing a fill; reject rather than allow negative cash or short positions. Keep this rule visible as a simulation simplification.
+Reservation and account consistency across approval and execution remain future integration requirements. Task 7 does not recheck affordability or risk within the broker; its caller must eventually prevent overspending and short positions using the quote and account state selected for execution.
 
 Observability: structured logs include run ID, event sequence, source event ID, intent/order/fill IDs where applicable, and reason codes. Summaries include quotes processed, rejected intents/orders, duplicates ignored, accepted orders, fills, pending count, cash, position, realized/unrealized PnL, and fees. Graceful shutdown stops input and finishes the current commit; pending orders remain recoverable.
 
@@ -98,7 +98,7 @@ Use Go's standard configuration, CSV, and structured logging facilities where su
 4. **Toy strategy:** implement a stateful PriceMovement type that compares consecutive integer midpoints and emits deterministic one-share BUY/SELL intents on rises/falls. The first quote and equal midpoints produce no signal. Acceptance: known sequences, rounding/overflow boundaries, validation, and deterministic run-local IDs pass tests. No replay or CLI integration.
 5. **Risk:** implement a side-effect-free checker against a supplied quote, available cash, held quantity, and positive limits. BUY uses ask and checks cash, maximum order notional, and maximum position; SELL uses bid and checks holdings. Validate inputs and reject arithmetic overflow. Acceptance: boundary, rejection, and no-mutation tests pass. Reservations, fees, freshness checks, and integration are deferred.
 6. **Order management:** create validated NEW orders from caller-approved intents, deduplicate by IntentID, and maintain explicit lifecycle transitions in memory. Acceptance: matching retries return the current order; conflicts and invalid transitions leave state unchanged; IDs are deterministic. No broker submission, fills, risk rechecks, or reservations.
-7. **Paper broker:** implement next-quote full fills, affordability recheck, deterministic fill IDs, and EOF expiration. Acceptance: no same-quote fills, no duplicate fills, no negative cash/short positions, and explicit results for price gaps.
+7. **Paper broker:** execute valid SUBMITTED orders fully at the supplied quote's ask/bid, use its timestamp, validate fills, and generate deterministic IDs. Deduplicate executions and reject conflicting OrderID reuse. Add SUBMITTED -> FILLED to OMS without coupling components. Acceptance: deterministic prices/timestamps/IDs, invalid-input rejection, no duplicate fills, and lifecycle tests pass. Account mutation, risk checks, fees, and integration are deferred.
 8. **Portfolio / PnL:** apply fills idempotently, calculate average cost and realized/unrealized PnL, and mark quotes. Acceptance: hand-calculated buy/sell/fee examples reconcile; duplicate fills leave balances unchanged.
 9. **Integration and observability:** wire the serial engine and complete in-memory flow, structured logs, graceful shutdown, and run summary. Acceptance: one local command produces a traceable quote-to-fill-to-PnL run with manually verifiable expected balances.
 10. **Journal, recovery, and crash/restart verification:** add single-writer ownership, durable commits, schema/integrity checks, input/configuration fingerprints, and state restoration. Test restart around acceptance/fill commits, duplicate delivery, storage failures, corrupt journals, and shutdown; document replay/resume/new-run commands. Acceptance: failures halt clearly, and uninterrupted and resumed runs produce identical orders, fills, balances, and domain outcomes.

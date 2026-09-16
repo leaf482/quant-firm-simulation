@@ -14,11 +14,12 @@ const (
 	OrderSubmitted OrderStatus = "SUBMITTED"
 	OrderCancelled OrderStatus = "CANCELLED"
 	OrderRejected  OrderStatus = "REJECTED"
+	OrderFilled    OrderStatus = "FILLED"
 )
 
 func (s OrderStatus) Validate() error {
 	switch s {
-	case OrderNew, OrderSubmitted, OrderCancelled, OrderRejected:
+	case OrderNew, OrderSubmitted, OrderCancelled, OrderRejected, OrderFilled:
 		return nil
 	default:
 		return fmt.Errorf("invalid order status %q", s)

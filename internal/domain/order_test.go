@@ -9,7 +9,7 @@ import (
 
 func TestOrderValidation(t *testing.T) {
 	valid := domain.Order{OrderID: "order-1", IntentID: "intent-1", Symbol: "AAPL", Side: domain.Buy, Quantity: 1, Status: domain.OrderNew, CreatedAt: time.Date(2026, 9, 15, 13, 30, 0, 0, time.UTC)}
-	for _, status := range []domain.OrderStatus{domain.OrderNew, domain.OrderSubmitted, domain.OrderCancelled, domain.OrderRejected} {
+	for _, status := range []domain.OrderStatus{domain.OrderNew, domain.OrderSubmitted, domain.OrderCancelled, domain.OrderRejected, domain.OrderFilled} {
 		o := valid
 		o.Status = status
 		if err := o.Validate(); err != nil {

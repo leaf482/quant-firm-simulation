@@ -67,7 +67,7 @@ func (m *Manager) Transition(id domain.OrderID, status domain.OrderStatus) (doma
 		return o, nil
 	}
 	allowed := (o.Status == domain.OrderNew && (status == domain.OrderSubmitted || status == domain.OrderRejected)) ||
-		(o.Status == domain.OrderSubmitted && (status == domain.OrderCancelled || status == domain.OrderRejected))
+		(o.Status == domain.OrderSubmitted && (status == domain.OrderCancelled || status == domain.OrderRejected || status == domain.OrderFilled))
 	if !allowed {
 		return domain.Order{}, fmt.Errorf("OMS: invalid transition %s -> %s for %q", o.Status, status, id)
 	}

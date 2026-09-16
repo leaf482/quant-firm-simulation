@@ -50,7 +50,7 @@ func TestCreateAndDeduplicate(t *testing.T) {
 }
 
 func TestTransitions(t *testing.T) {
-	states := []domain.OrderStatus{domain.OrderNew, domain.OrderSubmitted, domain.OrderCancelled, domain.OrderRejected}
+	states := []domain.OrderStatus{domain.OrderNew, domain.OrderSubmitted, domain.OrderCancelled, domain.OrderRejected, domain.OrderFilled}
 	for _, from := range states {
 		for _, to := range append(states, "INVALID", "") {
 			t.Run(string(from)+"-"+string(to), func(t *testing.T) {
@@ -60,17 +60,17 @@ func TestTransitions(t *testing.T) {
 				if err != nil {
 					t.Fatal(err)
 				}
-				if from == domain.OrderSubmitted || from == domain.OrderCancelled {
+				if from == domain.OrderSubmitted || from == domain.OrderCancelled || from == domain.OrderFilled {
 					if _, err = m.Transition(o.OrderID, domain.OrderSubmitted); err != nil {
 						t.Fatal(err)
 					}
 				}
-				if from == domain.OrderCancelled || from == domain.OrderRejected {
+				if from == domain.OrderCancelled || from == domain.OrderRejected || from == domain.OrderFilled {
 					if _, err = m.Transition(o.OrderID, from); err != nil {
 						t.Fatal(err)
 					}
 				}
-				allowed := from == to || (from == domain.OrderNew && (to == domain.OrderSubmitted || to == domain.OrderRejected)) || (from == domain.OrderSubmitted && (to == domain.OrderCancelled || to == domain.OrderRejected))
+				allowed := from == to || (from == domain.OrderNew && (to == domain.OrderSubmitted || to == domain.OrderRejected)) || (from == domain.OrderSubmitted && (to == domain.OrderCancelled || to == domain.OrderRejected || to == domain.OrderFilled))
 				got, err := m.Transition(o.OrderID, to)
 				if (err == nil) != allowed {
 					t.Fatalf("transition error=%v, allowed=%v", err, allowed)
