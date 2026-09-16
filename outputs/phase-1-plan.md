@@ -1,4 +1,4 @@
-# Phase 1 proposal — Tasks 1–9 approved
+# Phase 1 proposal — Tasks 1–10 approved
 
 ## Repository inspection
 
@@ -42,7 +42,7 @@ Structured logs and a final run summary expose the flow.
 1. **Domain:** typed quotes, intents, orders, fills, IDs, fixed-point values, and state-transition rules. No I/O or strategy rules.
 2. **Market data:** parse and validate CSV records; provide stable source IDs and ordered events. No trading decisions.
 3. **Engine:** own all mutable state; sequence events; supply immutable snapshots; orchestrate risk, OMS, broker, and accounting. Inject the clock and process one event to completion before the next.
-4. **Strategy:** consume validated quotes and return at most one intent. PriceMovement stores the selected symbol, previous rounded midpoint, and intent sequence. No broker, persistence, portfolio, or ledger access. Task 10 must recover this strategy state.
+4. **Strategy:** consume validated quotes and return at most one intent. PriceMovement stores the selected symbol, previous rounded midpoint, and intent sequence. No broker, persistence, portfolio, or ledger access. Strategy-state recovery is explicitly deferred beyond Task 10.
 5. **Risk:** reject invalid sizes, unsupported symbols, stale data, insufficient cash/holdings, and configured order/position limits. Include outstanding reservations and estimated fees. Approval and reservation happen together before submission.
 6. **Order management (OMS):** map stable intent IDs to deterministic order IDs and deduplicate matching retries; reject conflicting payloads. States are NEW, SUBMITTED, CANCELLED, REJECTED, and FILLED. Task 7 adds SUBMITTED -> FILLED. Creation assumes prior risk approval; OMS does not call the broker or handle reservations.
 7. **Paper broker:** accept valid SUBMITTED orders and matching quotes, return deterministic full fills at current ask/bid, and deduplicate by OrderID. Conflicting order payloads fail. Return a fill without changing OMS or account state; never access a real broker.
@@ -51,17 +51,15 @@ Structured logs and a final run summary expose the flow.
 
 ## Reliability contract
 
-Journal persistence, recovery, and crash/restart verification are introduced in Task 10, after the basic in-memory trading flow works. The durability and recovery requirements below describe the completed Phase 1 system; earlier tasks do not provide crash durability. Tasks 1–9 are currently approved for implementation.
+Task 10 adds optional append-only JSON Lines with schema version, consecutive sequence, and account metadata on each record. Only order_created, order_state_changed, and fill_applied events are persisted. New journals use exclusive file creation; existing files are inspected through a separate read-only recovery mode.
 
-Use a local append-only journal as the recovery source, separate from diagnostic logs. Each committed record contains the input identity, resulting domain events/state changes, reservations, generated IDs, and consumed CSV cursor. On restart, apply recorded transitions without invoking the strategy again; then continue at the next input record using the same configuration and input fingerprint.
+Each operation is validated in private tentative state, then its complete record is written and File.Sync succeeds before dependent processing, committed counters, or event logs. Commit order: NEW order, SUBMITTED transition, applied fill, FILLED transition. On any journal failure the run halts and discards private components. A failed sync is uncertain: any complete surviving record is subject to normal recovery validation.
 
-Journal and sync a transition before making it visible to later processing. A failed commit halts the run. Crash before commit means retry the same input and identities; crash after commit means restore its recorded effects. Keep broker pending orders in recoverable state, so a retried submission or replayed fill cannot duplicate execution or accounting. This is practical because the paper broker is entirely local and has no external side effects.
+Recovery starts fresh and rebuilds OMS, portfolio, broker fill deduplication, and deterministic ID sequences from the journal alone. It rejects malformed or incomplete lines, sequence errors, invalid values, conflicting identities, and impossible histories. Complete prefixes preserve their exact boundary; recovery never invents a missing transition. Empty journals have no metadata and cannot reconstruct an account.
 
-Use sequence numbers and record integrity validation. For Phase 1, an incomplete or corrupt journal stops recovery with a clear diagnostic; automatic repair and snapshots are deferred. Require a single writer per run. Include a journal schema version and reject unsupported versions. A resumed run must match its input/configuration fingerprint; an explicitly new run gets a separate journal.
+Strategy state, CSV cursor/fingerprint, automatic resume, snapshots, compaction, and tail repair are explicitly deferred. A supplied quote is required to value recovered holdings; CLI inspection shows orders, cash, and position only. This targets process termination with synced file writes, not a full transactional database or power-loss namespace durability.
 
-Task 9 checks risk against current cash/holdings and settles execution at the same quote before processing the next quote. Reservations remain deferred while no outstanding orders are allowed. Any downstream failure stops the run without rollback or recovery.
-
-Observability: structured logs include run ID, event sequence, source event ID, intent/order/fill IDs where applicable, and reason codes. Summaries include quotes processed, rejected intents/orders, duplicates ignored, accepted orders, fills, pending count, cash, position, market value, equity, and total PnL. Graceful shutdown stops input and finishes the current commit; pending orders remain recoverable.
+The synchronous engine settles one order at the same quote before considering another. No outstanding-order reservations or concurrent writers are introduced. A subprocess test exits without closing the journal, and fresh recovery must match balances/order states and continue order/fill IDs without collision.
 
 ## Proposed directory structure
 
@@ -101,7 +99,7 @@ Use Go's standard configuration, CSV, and structured logging facilities where su
 7. **Paper broker:** execute valid SUBMITTED orders fully at the supplied quote's ask/bid, use its timestamp, validate fills, and generate deterministic IDs. Deduplicate executions and reject conflicting OrderID reuse. Add SUBMITTED -> FILLED to OMS without coupling components. Acceptance: deterministic prices/timestamps/IDs, invalid-input rejection, no duplicate fills, and lifecycle tests pass. Account mutation, risk checks, fees, and integration are deferred.
 8. **Portfolio / PnL:** introduce distinct fixed-point Money and safe Price times Quantity arithmetic; migrate risk monetary values. Implement atomic, idempotent fill application and bid-based snapshots of cash, position, market value, equity, and total PnL. Acceptance: hand-calculated buys/sells and positive/negative PnL reconcile; duplicates and failed operations preserve state; arithmetic boundaries are tested. No cost basis, realized/unrealized split, fees, or integration.
 9. **Integration and observability:** run replay, strategy, risk, OMS, paper execution, and portfolio synchronously at the same quote; continue only on typed trading rejections. Add small CLI flags, deterministic standard-library logs, and exact end-to-end summary tests. No concurrency, persistence, recovery, or background shutdown machinery. Acceptance: one command completes the fixture with exact balances, and system failures halt without a success summary.
-10. **Journal, recovery, and crash/restart verification:** add single-writer ownership, durable commits, schema/integrity checks, input/configuration fingerprints, and state restoration. Test restart around acceptance/fill commits, duplicate delivery, storage failures, corrupt journals, and shutdown; document replay/resume/new-run commands. Acceptance: failures halt clearly, and uninterrupted and resumed runs produce identical orders, fills, balances, and domain outcomes.
+10. **Journal, recovery, and crash/restart verification:** add exclusively created JSONL journals, synced trading records, strict sequence/lifecycle checks, and fresh OMS/portfolio/broker recovery. Test complete prefixes, process termination, corruption, write/sync failure, and continued IDs. CLI supports separate new-run and recovery-inspection modes; strategy recovery and simulation resume are deferred.
 
 ## Phase 1 completion criteria
 

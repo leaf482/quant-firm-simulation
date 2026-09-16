@@ -3,7 +3,7 @@
 ## Purpose and current scope
 - Build a personal learning project about trading-system engineering, not profit optimization.
 - Production code uses Go. Phase 1 is paper trading only in one process.
-- The architecture and task order are recorded in `outputs/phase-1-plan.md`. Tasks 1–9 (through synchronous integration) are approved; subsequent implementation tasks require user approval.
+- The architecture and task order are recorded in `outputs/phase-1-plan.md`. Tasks 1–10 (through optional durable trading-state recovery) are approved. Strategy-state recovery and simulation resume remain out of scope.
 - Do not implement live trading, broker credentials, or a configuration switch that enables live execution. Never enable live trading automatically.
 - Do not make financial decisions for the user. Strategies and parameters are educational fixtures, not recommendations.
 
@@ -21,7 +21,7 @@
 - Inject time and any randomness. Record event time separately from processing time; tests must not depend on wall-clock sleeps.
 - Reject invalid, stale, or unsupported data and fail closed on risk/configuration errors.
 - State paper-fill assumptions explicitly. Never use future market data to make a strategy decision.
-- Journal and recovery are deferred to Task 10, after the basic in-memory trading flow works. Once implemented, persist a committed transition before exposing its effects, halt on journal failure, and reject corrupt recovery input instead of silently resetting state. Earlier tasks must not claim crash durability.
+- Journaled runs validate tentative private state, then append and sync each trading record before dependent processing or reporting commitment. Halt and discard the run on journal failure; reject corrupt recovery input instead of repairing or resetting it. Recovery reconstructs OMS, portfolio, and broker identities only; non-journaled runs have no durability.
 
 ## Tests, operations, and reviews
 - Test significant behavior: risk limits, outstanding reservations, order transitions, duplicates, retries, accounting, deterministic replay, and recovery.

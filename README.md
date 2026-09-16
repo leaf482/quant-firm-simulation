@@ -1,8 +1,8 @@
 # quant-firm-simulation
 
 A Go learning project for trading-system engineering. Currently implements
-Tasks 1–9: one synchronous PAPER simulation connecting CSV replay, strategy,
-risk, OMS, paper execution, and portfolio accounting. No persistence or recovery.
+Tasks 1–10: a synchronous PAPER simulation with optional durable JSONL trading
+journals and read-only recovery inspection. Strategy/CSV resume is not supported.
 
 ## Requirements
 
@@ -206,13 +206,14 @@ clock or store a mark. There is no cost basis, realized/unrealized split, fees,
 persistence, or calls to risk, OMS, or broker. Callers select the current quote.
 
 See [the Phase 1 plan](outputs/phase-1-plan.md) for the implementation order.
-Journal/recovery remains future work.
+Optional journal and recovery behavior is documented below.
 
 ## Engine
 
 `engine.Run(io.Reader, engine.Config, *log.Logger) (engine.Summary, error)` owns
 fresh concrete components per run. Config contains Symbol, InitialCash, and risk
-Limits. A nil logger discards logs. The caller closes the input reader.
+Limits, plus an optional fresh `*journal.Writer`. A nil logger discards logs.
+The caller closes the input reader and journal writer.
 
 For each quote: strategy -> current portfolio State -> risk -> OMS Create ->
 SUBMITTED -> paper execution using the same quote -> portfolio Apply -> FILLED.
@@ -230,4 +231,79 @@ The end-to-end test rejects an initial SELL, then buys at 103 and 105, sells at
 102, and marks the remaining share at 101. From 1000 initial cash it asserts:
 6 quotes, 4 intents, 3 approvals, 1 rejection, 3 orders/fills, cash 894, position 1,
 equity 995, PnL -5. Two independent runs must produce identical results and logs.
-Fatal errors do not roll back earlier steps; there is no restart or resume support.
+Fatal errors do not roll back earlier committed records. Trading-state recovery
+is available with a journal, but simulation resume is not supported.
+
+## Durable journal and recovery
+
+New run (the journal path must not exist; its parent directory must exist):
+
+```sh
+go run ./cmd/paper -csv testdata/quotes.csv -journal run.jsonl
+```
+
+Read-only recovery inspection, without CSV input or external account settings:
+
+```sh
+go run ./cmd/paper -recover run.jsonl
+```
+
+For the default fixture this prints `records=20 orders=5 cash=770.7700 position=1`
+and the five FILLED orders. `-recover` cannot be combined with `-journal` or run
+configuration flags (except `-mode PAPER`). It never writes or resumes the file.
+Without `-journal`, runs retain the existing in-memory behavior.
+
+`journal.Create(path, symbol, initialCash)` uses exclusive creation; an existing
+file is never overwritten or reopened for append. `Writer.Append(Event)` writes
+one JSON line and calls `File.Sync()` before success. `Writer.Close()` closes the
+file. `journal.Read(io.Reader)` validates records; `journal.Recover(io.Reader)`
+returns fresh OMS, portfolio, and paper broker components, or no state on error.
+
+Each line has schema version 1, a consecutive sequence starting at 1, symbol,
+initial cash (integer $0.0001 units), and exactly one of these trading events:
+
+1. `order_created`: full NEW order
+2. `order_state_changed`: order ID and target status
+3. `fill_applied`: full fill
+
+Account metadata is repeated so recovery requires only the journal. Metadata
+must agree across all records. Empty journals (including runs with no trades)
+have no account metadata to recover and are rejected explicitly. No quote marks,
+strategy state, CSV cursor, or run summary is persisted. Recovered equity/PnL
+requires a caller-supplied valid quote; CLI inspection reports cash/holdings only.
+
+### Exact commit order
+
+For each approved intent, the engine validates/applies each operation to its
+private, tentative in-memory state, then writes and syncs its record before any
+dependent processing, committed counter, or corresponding event log:
+
+1. Create NEW order -> append/sync `order_created`.
+2. Transition SUBMITTED -> append/sync `order_state_changed`.
+3. Execute and apply fill -> append/sync `fill_applied`.
+4. Transition FILLED -> append/sync `order_state_changed`.
+
+Existing component validation happens before journaling, so failed operations
+are not recorded as valid history. A write/sync failure immediately halts the
+run, discards its private components, and poisons the writer. It is never reported
+as committed. A failed Sync has an uncertain disk outcome: a complete record may
+still survive and be recovered; callers must not retry on that writer. Sync
+success guarantees the requested file flush, subject to OS/storage guarantees.
+This targets process termination, not filesystem namespace loss on power failure.
+
+Recovery reuses OMS creation/transitions, portfolio application, and broker fill
+restoration. It rejects sequence gaps/duplicates, unknown schema fields/types,
+invalid domain values, missing orders, conflicting IDs, and impossible lifecycle
+histories (including FILLED without an applied fill). A complete prefix may end
+at NEW, SUBMITTED, or after a fill but before FILLED; that exact state is preserved.
+Malformed JSON and an unterminated final line fail recovery; no tail repair occurs.
+
+OMS ID sequences are rebuilt through ordered Create calls; `Broker.Restore`
+rebuilds fill sequences and execution deduplication. `Manager.Get` and `Orders`
+return copies for inspection. A process-termination test persists two orders/fills,
+exits without closing the journal, then recovers cash 997, position 0, equity 997,
+PnL -3 and verifies next IDs `order-3` / `fill-3`.
+
+No database, snapshots, compaction, strategy recovery, automated resume, concurrent
+writers, or distributed coordination is implemented. Runtime journals are local
+artifacts and should not be committed.

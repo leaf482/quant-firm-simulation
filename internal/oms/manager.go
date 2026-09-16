@@ -4,6 +4,7 @@ package oms
 import (
 	"fmt"
 	"math"
+	"sort"
 
 	"github.com/leaf482/quant-firm-simulation/internal/domain"
 )
@@ -17,6 +18,25 @@ type Manager struct {
 }
 
 func NewManager() *Manager { return &Manager{} }
+
+// Get returns an order copy for recovery validation and inspection.
+func (m *Manager) Get(id domain.OrderID) (domain.Order, error) {
+	o, ok := m.orders[id]
+	if !ok {
+		return domain.Order{}, fmt.Errorf("OMS: unknown order ID %q", id)
+	}
+	return o, nil
+}
+
+// Orders returns copies in deterministic OrderID lexical order.
+func (m *Manager) Orders() []domain.Order {
+	orders := make([]domain.Order, 0, len(m.orders))
+	for _, o := range m.orders {
+		orders = append(orders, o)
+	}
+	sort.Slice(orders, func(i, j int) bool { return orders[i].OrderID < orders[j].OrderID })
+	return orders
+}
 
 // Create assumes the caller has obtained risk approval. Identical retries return
 // the current order; conflicting payloads for an existing IntentID are rejected.

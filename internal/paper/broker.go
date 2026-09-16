@@ -22,6 +22,30 @@ type Broker struct {
 
 func NewBroker() *Broker { return &Broker{} }
 
+// Restore rebuilds a recorded execution and ID sequence during fresh recovery.
+// It does not consult live quotes or modify OMS/account state. Repeated matching
+// fills are idempotent; conflicting IDs or order/fill data are rejected.
+func (b *Broker) Restore(order domain.Order, fill domain.Fill) error {
+	if err := fill.Validate(); err != nil {
+		return err
+	}
+	if err := order.Validate(); err != nil {
+		return err
+	}
+	if order.Status != domain.OrderSubmitted || order.OrderID != fill.OrderID || order.Symbol != fill.Symbol || order.Side != fill.Side || order.Quantity != fill.Quantity {
+		return fmt.Errorf("paper restore: fill does not match submitted order")
+	}
+	if old, ok := b.executions[order.OrderID]; ok {
+		if old.fill.FillID != fill.FillID || old.fill.Price != fill.Price || !old.fill.Timestamp.Equal(fill.Timestamp) {
+			return fmt.Errorf("paper restore: conflicting fill")
+		}
+	} else if b.sequence == math.MaxUint64 || fill.FillID != domain.FillID(fmt.Sprintf("fill-%d", b.sequence+1)) {
+		return fmt.Errorf("paper restore: unexpected fill ID %q", fill.FillID)
+	}
+	_, err := b.Execute(order, domain.Quote{Symbol: fill.Symbol, Timestamp: fill.Timestamp, Bid: fill.Price, Ask: fill.Price})
+	return err
+}
+
 // Execute fills a SUBMITTED order at the supplied quote: BUY at ask, SELL at bid.
 // Every call requires a valid SUBMITTED order and matching valid quote, including
 // retries. Identical retries return the original fill, even with a newer quote.

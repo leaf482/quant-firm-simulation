@@ -8,6 +8,7 @@ import (
 	"log"
 
 	"github.com/leaf482/quant-firm-simulation/internal/domain"
+	"github.com/leaf482/quant-firm-simulation/internal/journal"
 	"github.com/leaf482/quant-firm-simulation/internal/marketdata"
 	"github.com/leaf482/quant-firm-simulation/internal/oms"
 	"github.com/leaf482/quant-firm-simulation/internal/paper"
@@ -20,6 +21,7 @@ type Config struct {
 	Symbol      domain.Symbol
 	InitialCash domain.Money
 	Limits      risk.Limits
+	Journal     *journal.Writer // Optional fresh writer; caller closes it.
 }
 
 type Summary struct {
@@ -39,11 +41,25 @@ type Summary struct {
 // On failure, counters reflect completed steps; final account fields are only
 // populated after successful EOF and valuation. An approved intent is fully
 // settled before reading another quote; there are no outstanding reservations.
+// With a journal, component mutations are tentative private state until Append
+// and Sync succeed. No dependent step, committed counter or event log precedes
+// that success. On failure this run discards its private components immediately.
 func Run(input io.Reader, cfg Config, logger *log.Logger) (Summary, error) {
 	var result Summary
 	account, err := portfolio.New(cfg.Symbol, cfg.InitialCash)
 	if err != nil {
 		return result, fmt.Errorf("engine configuration: %w", err)
+	}
+	if cfg.Journal != nil {
+		if err := cfg.Journal.CheckConfig(cfg.Symbol, cfg.InitialCash); err != nil {
+			return result, err
+		}
+	}
+	commit := func(event journal.Event) error {
+		if cfg.Journal == nil {
+			return nil
+		}
+		return cfg.Journal.Append(event)
 	}
 	checker, err := risk.NewChecker(cfg.Limits)
 	if err != nil {
@@ -95,23 +111,35 @@ func Run(input io.Reader, cfg Config, logger *log.Logger) (Summary, error) {
 		if err != nil {
 			return result, fmt.Errorf("engine create intent %q: %w", intent.IntentID, err)
 		}
+		if err := commit(journal.Event{Type: journal.OrderCreated, Order: &order}); err != nil {
+			return result, err
+		}
 		result.OrdersCreated++
 		logger.Printf("event=order_created quote=%d intent_id=%q order_id=%q", result.QuotesProcessed, intent.IntentID, order.OrderID)
 		order, err = orders.Transition(order.OrderID, domain.OrderSubmitted)
 		if err != nil {
 			return result, fmt.Errorf("engine submit intent %q: %w", intent.IntentID, err)
 		}
+		if err := commit(journal.Event{Type: journal.OrderChanged, Change: &journal.Change{OrderID: order.OrderID, Status: domain.OrderSubmitted}}); err != nil {
+			return result, err
+		}
 		fill, err := broker.Execute(order, q)
 		if err != nil {
 			return result, fmt.Errorf("engine execute order %q: %w", order.OrderID, err)
 		}
-		logger.Printf("event=fill_created quote=%d intent_id=%q order_id=%q fill_id=%q price=%s quantity=%d", result.QuotesProcessed, intent.IntentID, fill.OrderID, fill.FillID, fill.Price, fill.Quantity)
 		if err := account.Apply(fill); err != nil {
 			return result, fmt.Errorf("engine apply fill %q: %w", fill.FillID, err)
 		}
+		if err := commit(journal.Event{Type: journal.FillApplied, Fill: &fill}); err != nil {
+			return result, err
+		}
+		logger.Printf("event=fill_created quote=%d intent_id=%q order_id=%q fill_id=%q price=%s quantity=%d", result.QuotesProcessed, intent.IntentID, fill.OrderID, fill.FillID, fill.Price, fill.Quantity)
 		result.FillsApplied++
 		if _, err := orders.Transition(order.OrderID, domain.OrderFilled); err != nil {
 			return result, fmt.Errorf("engine filled order %q: %w", order.OrderID, err)
+		}
+		if err := commit(journal.Event{Type: journal.OrderChanged, Change: &journal.Change{OrderID: order.OrderID, Status: domain.OrderFilled}}); err != nil {
+			return result, err
 		}
 	}
 	if result.QuotesProcessed == 0 {
