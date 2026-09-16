@@ -5,6 +5,7 @@ import (
 	"fmt"
 
 	"github.com/leaf482/quant-firm-simulation/internal/domain"
+	"github.com/leaf482/quant-firm-simulation/internal/reservation"
 )
 
 // Limits applies to BUY intents. SELL intents may reduce positions above limits.
@@ -26,6 +27,24 @@ func (l Limits) validate() error {
 
 // Checker holds immutable limits. Construct it with NewChecker.
 type Checker struct{ limits Limits }
+
+// CheckReserved evaluates a new intent against a value snapshot without changing
+// reservations. SELL uses actual unreserved holdings; BUY uses projected holdings
+// without credit for outstanding SELLs. Check remains the Phase 1 API.
+func (c *Checker) CheckReserved(intent domain.OrderIntent, quote domain.Quote, resources reservation.Resources) error {
+	available, err := resources.Derive()
+	if err != nil {
+		return fmt.Errorf("risk: %w", err)
+	}
+	if resources.Symbol != intent.Symbol {
+		return fmt.Errorf("risk: resource symbol mismatch")
+	}
+	position := available.ProjectedPosition
+	if intent.Side == domain.Sell {
+		position = available.SellQuantity
+	}
+	return c.Check(intent, quote, available.Cash, position)
+}
 
 // Rejection is an expected trading denial. Other errors indicate invalid inputs,
 // configuration, or arithmetic failures and must terminate a simulation.
