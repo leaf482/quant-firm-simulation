@@ -27,6 +27,12 @@ func (l Limits) validate() error {
 // Checker holds immutable limits. Construct it with NewChecker.
 type Checker struct{ limits Limits }
 
+// Rejection is an expected trading denial. Other errors indicate invalid inputs,
+// configuration, or arithmetic failures and must terminate a simulation.
+type Rejection struct{ Reason string }
+
+func (r *Rejection) Error() string { return r.Reason }
+
 func NewChecker(limits Limits) (*Checker, error) {
 	if err := limits.validate(); err != nil {
 		return nil, fmt.Errorf("risk limits: %w", err)
@@ -67,20 +73,20 @@ func (c *Checker) Check(intent domain.OrderIntent, quote domain.Quote, available
 	}
 	if intent.Side == domain.Sell {
 		if intent.Quantity > currentPosition {
-			return fmt.Errorf("risk: insufficient holdings: need %d, have %d", intent.Quantity, currentPosition)
+			return &Rejection{Reason: fmt.Sprintf("risk: insufficient holdings: need %d, have %d", intent.Quantity, currentPosition)}
 		}
 		return nil
 	}
 	if notional > availableCash {
-		return fmt.Errorf("risk: insufficient cash: need %s, have %s", notional, availableCash)
+		return &Rejection{Reason: fmt.Sprintf("risk: insufficient cash: need %s, have %s", notional, availableCash)}
 	}
 	if notional > c.limits.MaxOrderNotional {
-		return fmt.Errorf("risk: estimated notional %s exceeds maximum order notional %s", notional, c.limits.MaxOrderNotional)
+		return &Rejection{Reason: fmt.Sprintf("risk: estimated notional %s exceeds maximum order notional %s", notional, c.limits.MaxOrderNotional)}
 	}
 	// Avoid adding quantities, which could overflow. Subtraction is safe after
 	// checking that the nonnegative current position is within the limit.
 	if currentPosition > c.limits.MaxPosition || intent.Quantity > c.limits.MaxPosition-currentPosition {
-		return fmt.Errorf("risk: resulting position exceeds maximum position %d", c.limits.MaxPosition)
+		return &Rejection{Reason: fmt.Sprintf("risk: resulting position exceeds maximum position %d", c.limits.MaxPosition)}
 	}
 	return nil
 }

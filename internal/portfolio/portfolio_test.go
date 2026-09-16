@@ -283,3 +283,18 @@ func TestZeroValuePortfolioRejects(t *testing.T) {
 		t.Fatal("uninitialized portfolio accepted snapshot")
 	}
 }
+
+func TestStateIsReadOnly(t *testing.T) {
+	p := newPortfolio(t, 10000000)
+	if err := p.Apply(fill("buy", domain.Buy, 2, 1000000)); err != nil {
+		t.Fatal(err)
+	}
+	before := copyState(p)
+	cash, position := p.State()
+	if cash != 8000000 || position != 2 {
+		t.Fatalf("state = %d, %d", cash, position)
+	}
+	cash++
+	position++
+	assertUnchanged(t, p, before)
+}

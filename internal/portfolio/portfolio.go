@@ -86,6 +86,10 @@ type Snapshot struct {
 	PnL         domain.Money
 }
 
+// State returns cash and shares by value, without requiring a market mark.
+// The portfolio must have been constructed with New.
+func (p *Portfolio) State() (domain.Money, domain.Quantity) { return p.cash, p.position }
+
 // Snapshot values holdings at the supplied quote's bid. It never changes account
 // state or stores a mark; quote selection and freshness belong to the caller.
 func (p *Portfolio) Snapshot(quote domain.Quote) (Snapshot, error) {

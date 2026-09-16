@@ -1,6 +1,7 @@
 package risk_test
 
 import (
+	"errors"
 	"math"
 	"strings"
 	"testing"
@@ -80,6 +81,11 @@ func TestCheck(t *testing.T) {
 			before := x
 			for repeat := 0; repeat < 2; repeat++ {
 				err = c.Check(x.intent, x.quote, x.cash, x.position)
+				var rejection *risk.Rejection
+				wantRejection := tt.reason == "insufficient cash" || tt.reason == "insufficient holdings" || tt.reason == "maximum position" || tt.reason == "maximum order notional"
+				if errors.As(err, &rejection) != wantRejection {
+					t.Fatalf("error category = %T, expected trading rejection = %v", err, wantRejection)
+				}
 				if tt.reason == "" {
 					if err != nil {
 						t.Fatal(err)

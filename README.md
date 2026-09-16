@@ -1,9 +1,8 @@
 # quant-firm-simulation
 
 A Go learning project for trading-system engineering. Currently implements
-Tasks 1–8: a CLI bootstrap with paper-only configuration validation,
-domain contracts, CSV replay, a toy strategy, risk checks, an OMS, a paper broker,
-and an in-memory portfolio. Components are not integrated yet.
+Tasks 1–9: one synchronous PAPER simulation connecting CSV replay, strategy,
+risk, OMS, paper execution, and portfolio accounting. No persistence or recovery.
 
 ## Requirements
 
@@ -25,26 +24,27 @@ The executable is `bin/paper.exe` on Windows or `bin/paper` on other platforms.
 ```sh
 go test ./...
 go vet ./...
+go test -race ./...
 ```
 
 ## Run
 
 ```sh
 go run ./cmd/paper
+go run ./cmd/paper -csv testdata/quotes.csv -symbol AAPL -initial-cash 1000 -max-order-notional 500 -max-position 10
 ```
 
 Expected output:
 
 ```text
-Starting quant-firm-simulation in PAPER mode
+PAPER summary: quotes=6 intents=5 approvals=5 rejections=0 orders=5 fills=5 cash=770.7700 position=1 equity=999.8700 pnl=-0.1300
 ```
 
-The bootstrap validates configuration, prints this message, and exits successfully.
-It does not yet run a trading loop.
-
-Configuration currently contains only `Mode`. The optional `-mode` flag defaults
-to `PAPER`; only the exact value `PAPER` is accepted. Empty values and any other
-mode produce an error and a nonzero exit status. There is no live execution mode.
+The second command spells out the development defaults. Monetary flags are dollar
+strings with at most four decimals; quantity is an integer. `-mode` accepts only
+`PAPER`. Invalid configuration, files, replay data, or system errors exit nonzero.
+Event logs go to stderr; the successful final summary goes to stdout. Logs omit
+wall-clock prefixes and include quote sequence and intent/order/fill IDs.
 
 ## Domain contracts
 
@@ -79,7 +79,7 @@ EOF returns `io.EOF`. Invalid input stops replay with a row-level error; subsequ
 calls return the same error. Row numbers count CSV records with the header as
 row 1; blank lines are ignored following `encoding/csv` behavior.
 
-The CLI remains the startup-only bootstrap; replay is not wired into it yet.
+The CLI opens the CSV; the engine consumes it to EOF through this reader.
 
 ## Toy strategy
 
@@ -102,8 +102,8 @@ deduplication are deferred. Sequence exhaustion returns an error instead of wrap
 The first valid quote selects the symbol; later symbol changes are rejected.
 Errors leave strategy state unchanged. Quotes are processed in caller-supplied
 order; timestamp ordering remains the replay reader's responsibility.
-The strategy is educational, has no position awareness, and is not connected to
-replay, the CLI, or execution components.
+The strategy is educational and has no position awareness. The engine supplies
+quotes and routes generated intents through risk before creating orders.
 
 ## Pre-trade risk
 
@@ -124,7 +124,8 @@ uses remaining capacity instead of adding quantities, avoiding addition overflow
 `nil` means approved; a contextual error describes the first rejection.
 Checks do not mutate state or reserve cash/shares, so repeated approvals do not
 consume resources. The caller supplies the current quote and account snapshot;
-freshness, fees, reservations, and execution integration are deferred.
+freshness, fees, and reservations are deferred. `*risk.Rejection` identifies an
+expected cash/holdings/limit denial; other errors are fatal to the engine.
 The risk checker uses the shared overflow-checked `domain.Notional` helper.
 
 ## Order management
@@ -150,7 +151,7 @@ in its current state. A different symbol, side, quantity, or timestamp for that
 ID is rejected without mutation; timestamps are compared as instants.
 Returned orders are copies. IDs are local to the manager run; exhaustion fails
 without wrapping. Invalid requests do not consume IDs or change managed orders.
-There is no persistence, reservation handling, risk recheck, or component wiring.
+There is no persistence, reservation handling, or risk recheck inside OMS.
 
 ## Paper broker
 
@@ -168,8 +169,7 @@ instant is rejected. Duplicate calls do not advance IDs. All calls, including
 retries, require valid inputs and SUBMITTED status; FILLED orders are rejected.
 
 The broker returns copies and never calls the OMS or changes account state.
-The future caller is responsible for applying the returned fill and requesting
-the OMS transition to FILLED. Components are not wired together yet.
+The engine applies the returned fill and requests the OMS transition to FILLED.
 
 ## Portfolio and money
 
@@ -206,4 +206,28 @@ clock or store a mark. There is no cost basis, realized/unrealized split, fees,
 persistence, or calls to risk, OMS, or broker. Callers select the current quote.
 
 See [the Phase 1 plan](outputs/phase-1-plan.md) for the implementation order.
-Integration/observability and journal/recovery are future tasks.
+Journal/recovery remains future work.
+
+## Engine
+
+`engine.Run(io.Reader, engine.Config, *log.Logger) (engine.Summary, error)` owns
+fresh concrete components per run. Config contains Symbol, InitialCash, and risk
+Limits. A nil logger discards logs. The caller closes the input reader.
+
+For each quote: strategy -> current portfolio State -> risk -> OMS Create ->
+SUBMITTED -> paper execution using the same quote -> portfolio Apply -> FILLED.
+No signal skips execution. Expected risk denials are logged and counted without
+creating orders. Every other error stops the run immediately. Each order settles
+before the next quote; there are no outstanding orders or reservations.
+
+The summary counts quotes, intents, approvals, rejections, orders, and applied
+fills, plus final cash, position, equity, and PnL. The final valid quote supplies
+the bid mark, even if it produced no signal or a rejected intent. Empty input or
+a header without quotes is an error. Failed runs return partial counters only;
+final account fields must not be interpreted as a completed valuation.
+
+The end-to-end test rejects an initial SELL, then buys at 103 and 105, sells at
+102, and marks the remaining share at 101. From 1000 initial cash it asserts:
+6 quotes, 4 intents, 3 approvals, 1 rejection, 3 orders/fills, cash 894, position 1,
+equity 995, PnL -5. Two independent runs must produce identical results and logs.
+Fatal errors do not roll back earlier steps; there is no restart or resume support.
