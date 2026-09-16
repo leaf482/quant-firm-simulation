@@ -1,8 +1,9 @@
 # quant-firm-simulation
 
 A Go learning project for trading-system engineering. Currently implements
-Tasks 1–7: a CLI bootstrap with paper-only configuration validation,
-domain contracts, CSV replay, a toy strategy, risk checks, an OMS, and a paper broker.
+Tasks 1–8: a CLI bootstrap with paper-only configuration validation,
+domain contracts, CSV replay, a toy strategy, risk checks, an OMS, a paper broker,
+and an in-memory portfolio. Components are not integrated yet.
 
 ## Requirements
 
@@ -109,7 +110,7 @@ replay, the CLI, or execution components.
 `risk.NewChecker(risk.Limits) (*risk.Checker, error)` requires positive
 `MaxOrderNotional` and `MaxPosition`. Call
 `Check(intent, quote, availableCash, currentPosition) error` for each decision.
-Cash and total notional use `domain.Price`'s $0.0001 units; position is whole
+Cash and `MaxOrderNotional` use `domain.Money` in $0.0001 units; position is whole
 shares of the supplied symbol. Account values may be zero but not negative.
 
 The checker validates both domain inputs and requires matching symbols.
@@ -124,7 +125,7 @@ uses remaining capacity instead of adding quantities, avoiding addition overflow
 Checks do not mutate state or reserve cash/shares, so repeated approvals do not
 consume resources. The caller supplies the current quote and account snapshot;
 freshness, fees, reservations, and execution integration are deferred.
-No additional domain arithmetic API or money library was needed.
+The risk checker uses the shared overflow-checked `domain.Notional` helper.
 
 ## Order management
 
@@ -170,6 +171,39 @@ The broker returns copies and never calls the OMS or changes account state.
 The future caller is responsible for applying the returned fill and requesting
 the OMS transition to FILLED. Components are not wired together yet.
 
+## Portfolio and money
+
+`domain.Money` is a distinct `int64` type for monetary balances, values, and PnL,
+using the same $0.0001 scale as `Price`. It can represent negative PnL; portfolio
+cash is constrained to nonnegative values. `Money.String()` formats four decimal
+places. `domain.Notional(price Price, quantity Quantity) (Money, error)` safely
+multiplies a positive price by a nonnegative whole-share quantity. Zero quantity
+supports an empty position; overflow is rejected before multiplication.
+
+`portfolio.New(symbol domain.Symbol, initialCash domain.Money) (*Portfolio, error)`
+requires a nonblank symbol and nonnegative cash. `Apply(domain.Fill) error` validates
+the fill and symbol, then updates cash and holdings atomically:
+
+- BUY: subtract price times quantity from cash and add shares; reject insufficient cash.
+- SELL: add proceeds to cash and subtract shares; reject insufficient holdings.
+
+All arithmetic is checked before state changes. Each FillID is applied at most
+once. Matching retries succeed without mutation; different order ID, symbol,
+side, quantity, price, or timestamp for an existing FillID is rejected. Timestamps
+are compared as instants. Failed fills are not recorded as applied.
+
+`Snapshot(domain.Quote) (Snapshot, error)` validates the quote and matching symbol,
+then returns `Cash`, `Position`, `MarketValue`, `Equity`, and `PnL` without mutation:
+
+```text
+MarketValue = quote.Bid * Position
+Equity      = Cash + MarketValue
+PnL         = Equity - initialCash
+```
+
+Overflow returns an error. Quote time is simulated; snapshots do not use the wall
+clock or store a mark. There is no cost basis, realized/unrealized split, fees,
+persistence, or calls to risk, OMS, or broker. Callers select the current quote.
+
 See [the Phase 1 plan](outputs/phase-1-plan.md) for the implementation order.
-Portfolio/PnL,
-integration/observability, and journal/recovery are future tasks.
+Integration/observability and journal/recovery are future tasks.

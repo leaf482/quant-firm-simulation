@@ -3,15 +3,14 @@ package risk
 
 import (
 	"fmt"
-	"math"
 
 	"github.com/leaf482/quant-firm-simulation/internal/domain"
 )
 
 // Limits applies to BUY intents. SELL intents may reduce positions above limits.
-// MaxOrderNotional uses the same $0.0001 units as domain.Price for total dollars.
+// MaxOrderNotional is total money in $0.0001 units, not a per-share price.
 type Limits struct {
-	MaxOrderNotional domain.Price
+	MaxOrderNotional domain.Money
 	MaxPosition      domain.Quantity
 }
 
@@ -39,7 +38,7 @@ func NewChecker(limits Limits) (*Checker, error) {
 // availableCash is total cash in $0.0001 units; currentPosition is held shares
 // of the quote's symbol. Both may be zero but cannot be negative.
 // Approval does not reserve resources or guarantee a future execution price.
-func (c *Checker) Check(intent domain.OrderIntent, quote domain.Quote, availableCash domain.Price, currentPosition domain.Quantity) error {
+func (c *Checker) Check(intent domain.OrderIntent, quote domain.Quote, availableCash domain.Money, currentPosition domain.Quantity) error {
 	if err := c.limits.validate(); err != nil {
 		return fmt.Errorf("risk limits: %w", err)
 	}
@@ -62,12 +61,10 @@ func (c *Checker) Check(intent domain.OrderIntent, quote domain.Quote, available
 	if intent.Side == domain.Sell {
 		price = quote.Bid
 	}
-	// Validation guarantees positive price and quantity. Check before multiplying;
-	// whole shares preserve the $0.0001 scale without rounding or rescaling.
-	if int64(price) > math.MaxInt64/int64(intent.Quantity) {
-		return fmt.Errorf("risk: estimated order notional overflows int64")
+	notional, err := domain.Notional(price, intent.Quantity)
+	if err != nil {
+		return fmt.Errorf("risk: estimated order %w", err)
 	}
-	notional := domain.Price(int64(price) * int64(intent.Quantity))
 	if intent.Side == domain.Sell {
 		if intent.Quantity > currentPosition {
 			return fmt.Errorf("risk: insufficient holdings: need %d, have %d", intent.Quantity, currentPosition)

@@ -3,7 +3,7 @@
 ## Purpose and current scope
 - Build a personal learning project about trading-system engineering, not profit optimization.
 - Production code uses Go. Phase 1 is paper trading only in one process.
-- The architecture and task order are recorded in `outputs/phase-1-plan.md`. Tasks 1–7 (through the paper broker) are approved; subsequent implementation tasks require user approval.
+- The architecture and task order are recorded in `outputs/phase-1-plan.md`. Tasks 1–8 (through the in-memory portfolio) are approved; subsequent implementation tasks require user approval.
 - Do not implement live trading, broker credentials, or a configuration switch that enables live execution. Never enable live trading automatically.
 - Do not make financial decisions for the user. Strategies and parameters are educational fixtures, not recommendations.
 

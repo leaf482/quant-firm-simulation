@@ -26,7 +26,7 @@ func TestCheck(t *testing.T) {
 	type input struct {
 		intent   domain.OrderIntent
 		quote    domain.Quote
-		cash     domain.Price
+		cash     domain.Money
 		position domain.Quantity
 		limits   risk.Limits
 	}

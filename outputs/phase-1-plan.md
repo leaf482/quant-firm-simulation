@@ -1,4 +1,4 @@
-# Phase 1 proposal — Tasks 1–7 approved
+# Phase 1 proposal — Tasks 1–8 approved
 
 ## Repository inspection
 
@@ -46,12 +46,12 @@ Structured logs and a final run summary expose the flow.
 5. **Risk:** reject invalid sizes, unsupported symbols, stale data, insufficient cash/holdings, and configured order/position limits. Include outstanding reservations and estimated fees. Approval and reservation happen together before submission.
 6. **Order management (OMS):** map stable intent IDs to deterministic order IDs and deduplicate matching retries; reject conflicting payloads. States are NEW, SUBMITTED, CANCELLED, REJECTED, and FILLED. Task 7 adds SUBMITTED -> FILLED. Creation assumes prior risk approval; OMS does not call the broker or handle reservations.
 7. **Paper broker:** accept valid SUBMITTED orders and matching quotes, return deterministic full fills at current ask/bid, and deduplicate by OrderID. Conflicting order payloads fail. Return a fill without changing OMS or account state; never access a real broker.
-8. **Portfolio:** apply unique fills once; update cash, holdings, average cost, realized PnL, and fees. Mark unrealized PnL at the current midpoint, recording mark time. Define PnL as realized plus unrealized minus fees, with cost-basis rounding documented.
+8. **Portfolio:** apply validated fills once by FillID, rejecting conflicting reuse, insufficient cash/holdings, wrong symbols, and overflow without mutation. Track initial/current Money cash and whole-share position. Read-only snapshots value holdings at bid; total PnL is cash plus market value minus initial cash. Cost basis, realized/unrealized split, and fees are deferred.
 9. **Journal and operations:** append ordered transition records, flush durable commits, recover state and deduplication indexes, and emit structured logs plus summary counters. No dashboard or monitoring service is needed initially.
 
 ## Reliability contract
 
-Journal persistence, recovery, and crash/restart verification are introduced in Task 10, after the basic in-memory trading flow works. The durability and recovery requirements below describe the completed Phase 1 system; earlier tasks do not provide crash durability. Tasks 1–7 are currently approved for implementation.
+Journal persistence, recovery, and crash/restart verification are introduced in Task 10, after the basic in-memory trading flow works. The durability and recovery requirements below describe the completed Phase 1 system; earlier tasks do not provide crash durability. Tasks 1–8 are currently approved for implementation.
 
 Use a local append-only journal as the recovery source, separate from diagnostic logs. Each committed record contains the input identity, resulting domain events/state changes, reservations, generated IDs, and consumed CSV cursor. On restart, apply recorded transitions without invoking the strategy again; then continue at the next input record using the same configuration and input fingerprint.
 
@@ -61,7 +61,7 @@ Use sequence numbers and record integrity validation. For Phase 1, an incomplete
 
 Reservation and account consistency across approval and execution remain future integration requirements. Task 7 does not recheck affordability or risk within the broker; its caller must eventually prevent overspending and short positions using the quote and account state selected for execution.
 
-Observability: structured logs include run ID, event sequence, source event ID, intent/order/fill IDs where applicable, and reason codes. Summaries include quotes processed, rejected intents/orders, duplicates ignored, accepted orders, fills, pending count, cash, position, realized/unrealized PnL, and fees. Graceful shutdown stops input and finishes the current commit; pending orders remain recoverable.
+Observability: structured logs include run ID, event sequence, source event ID, intent/order/fill IDs where applicable, and reason codes. Summaries include quotes processed, rejected intents/orders, duplicates ignored, accepted orders, fills, pending count, cash, position, market value, equity, and total PnL. Graceful shutdown stops input and finishes the current commit; pending orders remain recoverable.
 
 ## Proposed directory structure
 
@@ -99,7 +99,7 @@ Use Go's standard configuration, CSV, and structured logging facilities where su
 5. **Risk:** implement a side-effect-free checker against a supplied quote, available cash, held quantity, and positive limits. BUY uses ask and checks cash, maximum order notional, and maximum position; SELL uses bid and checks holdings. Validate inputs and reject arithmetic overflow. Acceptance: boundary, rejection, and no-mutation tests pass. Reservations, fees, freshness checks, and integration are deferred.
 6. **Order management:** create validated NEW orders from caller-approved intents, deduplicate by IntentID, and maintain explicit lifecycle transitions in memory. Acceptance: matching retries return the current order; conflicts and invalid transitions leave state unchanged; IDs are deterministic. No broker submission, fills, risk rechecks, or reservations.
 7. **Paper broker:** execute valid SUBMITTED orders fully at the supplied quote's ask/bid, use its timestamp, validate fills, and generate deterministic IDs. Deduplicate executions and reject conflicting OrderID reuse. Add SUBMITTED -> FILLED to OMS without coupling components. Acceptance: deterministic prices/timestamps/IDs, invalid-input rejection, no duplicate fills, and lifecycle tests pass. Account mutation, risk checks, fees, and integration are deferred.
-8. **Portfolio / PnL:** apply fills idempotently, calculate average cost and realized/unrealized PnL, and mark quotes. Acceptance: hand-calculated buy/sell/fee examples reconcile; duplicate fills leave balances unchanged.
+8. **Portfolio / PnL:** introduce distinct fixed-point Money and safe Price times Quantity arithmetic; migrate risk monetary values. Implement atomic, idempotent fill application and bid-based snapshots of cash, position, market value, equity, and total PnL. Acceptance: hand-calculated buys/sells and positive/negative PnL reconcile; duplicates and failed operations preserve state; arithmetic boundaries are tested. No cost basis, realized/unrealized split, fees, or integration.
 9. **Integration and observability:** wire the serial engine and complete in-memory flow, structured logs, graceful shutdown, and run summary. Acceptance: one local command produces a traceable quote-to-fill-to-PnL run with manually verifiable expected balances.
 10. **Journal, recovery, and crash/restart verification:** add single-writer ownership, durable commits, schema/integrity checks, input/configuration fingerprints, and state restoration. Test restart around acceptance/fill commits, duplicate delivery, storage failures, corrupt journals, and shutdown; document replay/resume/new-run commands. Acceptance: failures halt clearly, and uninterrupted and resumed runs produce identical orders, fills, balances, and domain outcomes.
 
