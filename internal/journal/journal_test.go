@@ -2,7 +2,6 @@ package journal
 
 import (
 	"bytes"
-	"encoding/json"
 	"errors"
 	"io"
 	"os"
@@ -23,7 +22,7 @@ func events() []Event {
 func records() []Record {
 	var out []Record
 	for n, e := range events() {
-		out = append(out, Record{Version: 1, Sequence: uint64(n + 1), Symbol: "AAPL", InitialCash: 10000000, Event: e})
+		out = append(out, Record{Version: schemaVersion, Sequence: uint64(n + 1), Symbol: "AAPL", InitialCash: 10000000, Event: e})
 	}
 	return out
 }
@@ -31,9 +30,12 @@ func encode(t *testing.T, r []Record) string {
 	t.Helper()
 	var b bytes.Buffer
 	for _, record := range r {
-		if err := json.NewEncoder(&b).Encode(record); err != nil {
+		line, err := encodeRecord(record)
+		if err != nil {
 			t.Fatal(err)
 		}
+		b.Write(line)
+		b.WriteByte('\n')
 	}
 	return b.String()
 }
@@ -125,7 +127,7 @@ func TestCorruptHistories(t *testing.T) {
 		{"gap", func(r []Record) []Record { r[1].Sequence = 3; return r }},
 		{"out of order", func(r []Record) []Record { r[2].Sequence = 2; return r }},
 		{"duplicate sequence", func(r []Record) []Record { r[1].Sequence = 1; return r }},
-		{"version", func(r []Record) []Record { r[0].Version = 2; return r }},
+		{"version", func(r []Record) []Record { r[0].Version = schemaVersion + 1; return r }},
 		{"config mismatch", func(r []Record) []Record { r[1].InitialCash++; return r }},
 		{"filled before submitted", func(r []Record) []Record { r[1].Event.Change.Status = domain.OrderFilled; return r }},
 		{"unknown fill order", func(r []Record) []Record { r[2].Event.Fill.OrderID = "order-9"; return r }},
@@ -138,7 +140,7 @@ func TestCorruptHistories(t *testing.T) {
 		{"conflicting duplicate fill", func(r []Record) []Record {
 			f := *r[2].Event.Fill
 			f.Price++
-			r = append(r, Record{Version: 1, Sequence: 5, Symbol: "AAPL", InitialCash: 10000000, Event: Event{Type: FillApplied, Fill: &f}})
+			r = append(r, Record{Version: schemaVersion, Sequence: 5, Symbol: "AAPL", InitialCash: 10000000, Event: Event{Type: FillApplied, Fill: &f}})
 			return r
 		}},
 		{"insufficient cash", func(r []Record) []Record {
@@ -178,7 +180,7 @@ func (f *failingFile) Write(p []byte) (int, error) {
 		return 0, f.writeErr
 	}
 	if f.short {
-		return len(p) - 1, nil
+		return f.data.Write(p[:len(p)/2])
 	}
 	return f.data.Write(p)
 }
@@ -205,6 +207,21 @@ func TestDurabilityFailures(t *testing.T) {
 			}
 			if err := w.Append(events()[0]); err == nil || tt.file.writes != 1 {
 				t.Fatal("poisoned writer retried")
+			}
+			state, err := Recover(bytes.NewReader(tt.file.data.Bytes()))
+			if tt.name == "sync" {
+				// A failed Sync does not undo a complete Write. Model the
+				// outcome where those bytes survive, despite no acknowledgement.
+				if err != nil || state == nil || state.Records != 1 {
+					t.Fatalf("complete surviving record: %v", err)
+				}
+				o, err := state.Orders.Get("order-1")
+				cash, position := state.Portfolio.State()
+				if err != nil || o.Status != domain.OrderNew || cash != 10000000 || position != 0 {
+					t.Fatal("wrong surviving NEW state")
+				}
+			} else if err == nil || state != nil {
+				t.Fatal("empty or partially written journal returned state")
 			}
 		})
 	}

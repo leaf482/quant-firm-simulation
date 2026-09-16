@@ -3,8 +3,6 @@ package journal
 
 import (
 	"bufio"
-	"bytes"
-	"encoding/json"
 	"fmt"
 	"io"
 	"math"
@@ -133,8 +131,8 @@ func (w *Writer) Append(event Event) error {
 	if err := event.validate(); err != nil {
 		return err
 	}
-	record := Record{Version: 1, Sequence: w.sequence + 1, Symbol: w.symbol, InitialCash: w.initialCash, Event: event}
-	line, err := json.Marshal(record)
+	record := Record{Version: schemaVersion, Sequence: w.sequence + 1, Symbol: w.symbol, InitialCash: w.initialCash, Event: event}
+	line, err := encodeRecord(record)
 	if err != nil {
 		return err
 	}
@@ -179,17 +177,11 @@ func Read(input io.Reader) ([]Record, error) {
 		if err != nil {
 			return nil, fmt.Errorf("journal row %d: incomplete record: %w", row, err)
 		}
-		var record Record
-		decoder := json.NewDecoder(bytes.NewReader(line))
-		decoder.DisallowUnknownFields()
-		if err := decoder.Decode(&record); err != nil {
+		record, err := decodeRecord(line)
+		if err != nil {
 			return nil, fmt.Errorf("journal row %d: %w", row, err)
 		}
-		var extra any
-		if err := decoder.Decode(&extra); err != io.EOF {
-			return nil, fmt.Errorf("journal row %d: trailing JSON", row)
-		}
-		if record.Version != 1 || record.Sequence != uint64(row) {
+		if record.Version != schemaVersion || record.Sequence != uint64(row) {
 			return nil, fmt.Errorf("journal row %d: invalid version or sequence", row)
 		}
 		if strings.TrimSpace(string(record.Symbol)) == "" || record.InitialCash < 0 {

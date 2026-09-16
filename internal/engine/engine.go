@@ -45,6 +45,26 @@ type Summary struct {
 // and Sync succeed. No dependent step, committed counter or event log precedes
 // that success. On failure this run discards its private components immediately.
 func Run(input io.Reader, cfg Config, logger *log.Logger) (Summary, error) {
+	return run(input, cfg, logger, runHooks{})
+}
+
+// runHooks is an internal test seam, never configured by the CLI or public API.
+// at interrupts real component operations at named boundaries; append permits
+// fixtures for uncertain/partial I/O outcomes. With nil hooks the production
+// path always calls the real journal writer without changes.
+type runHooks struct {
+	at     func(boundary string) error
+	append func(journal.Event) error
+}
+
+func (h runHooks) reach(boundary string) error {
+	if h.at != nil {
+		return h.at(boundary)
+	}
+	return nil
+}
+
+func run(input io.Reader, cfg Config, logger *log.Logger, hooks runHooks) (Summary, error) {
 	var result Summary
 	account, err := portfolio.New(cfg.Symbol, cfg.InitialCash)
 	if err != nil {
@@ -56,6 +76,9 @@ func Run(input io.Reader, cfg Config, logger *log.Logger) (Summary, error) {
 		}
 	}
 	commit := func(event journal.Event) error {
+		if hooks.append != nil {
+			return hooks.append(event)
+		}
 		if cfg.Journal == nil {
 			return nil
 		}
@@ -107,38 +130,68 @@ func Run(input io.Reader, cfg Config, logger *log.Logger) (Summary, error) {
 			continue
 		}
 		result.RiskApprovals++
+		if err := hooks.reach("before_new"); err != nil {
+			return result, err
+		}
 		order, err := orders.Create(*intent)
 		if err != nil {
 			return result, fmt.Errorf("engine create intent %q: %w", intent.IntentID, err)
+		}
+		if err := hooks.reach("after_new_mutation"); err != nil {
+			return result, err
 		}
 		if err := commit(journal.Event{Type: journal.OrderCreated, Order: &order}); err != nil {
 			return result, err
 		}
 		result.OrdersCreated++
 		logger.Printf("event=order_created quote=%d intent_id=%q order_id=%q", result.QuotesProcessed, intent.IntentID, order.OrderID)
+		if err := hooks.reach("after_new_sync"); err != nil {
+			return result, err
+		}
 		order, err = orders.Transition(order.OrderID, domain.OrderSubmitted)
 		if err != nil {
 			return result, fmt.Errorf("engine submit intent %q: %w", intent.IntentID, err)
 		}
+		if err := hooks.reach("after_submitted_mutation"); err != nil {
+			return result, err
+		}
 		if err := commit(journal.Event{Type: journal.OrderChanged, Change: &journal.Change{OrderID: order.OrderID, Status: domain.OrderSubmitted}}); err != nil {
+			return result, err
+		}
+		if err := hooks.reach("after_submitted_sync"); err != nil {
 			return result, err
 		}
 		fill, err := broker.Execute(order, q)
 		if err != nil {
 			return result, fmt.Errorf("engine execute order %q: %w", order.OrderID, err)
 		}
+		if err := hooks.reach("after_broker_fill"); err != nil {
+			return result, err
+		}
 		if err := account.Apply(fill); err != nil {
 			return result, fmt.Errorf("engine apply fill %q: %w", fill.FillID, err)
+		}
+		if err := hooks.reach("after_portfolio_mutation"); err != nil {
+			return result, err
 		}
 		if err := commit(journal.Event{Type: journal.FillApplied, Fill: &fill}); err != nil {
 			return result, err
 		}
 		logger.Printf("event=fill_created quote=%d intent_id=%q order_id=%q fill_id=%q price=%s quantity=%d", result.QuotesProcessed, intent.IntentID, fill.OrderID, fill.FillID, fill.Price, fill.Quantity)
 		result.FillsApplied++
+		if err := hooks.reach("after_fill_sync"); err != nil {
+			return result, err
+		}
 		if _, err := orders.Transition(order.OrderID, domain.OrderFilled); err != nil {
 			return result, fmt.Errorf("engine filled order %q: %w", order.OrderID, err)
 		}
+		if err := hooks.reach("after_filled_mutation"); err != nil {
+			return result, err
+		}
 		if err := commit(journal.Event{Type: journal.OrderChanged, Change: &journal.Change{OrderID: order.OrderID, Status: domain.OrderFilled}}); err != nil {
+			return result, err
+		}
+		if err := hooks.reach("after_filled_sync"); err != nil {
 			return result, err
 		}
 	}

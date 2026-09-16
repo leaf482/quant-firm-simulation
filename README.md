@@ -259,12 +259,30 @@ one JSON line and calls `File.Sync()` before success. `Writer.Close()` closes th
 file. `journal.Read(io.Reader)` validates records; `journal.Recover(io.Reader)`
 returns fresh OMS, portfolio, and paper broker components, or no state on error.
 
-Each line has schema version 1, a consecutive sequence starting at 1, symbol,
-initial cash (integer $0.0001 units), and exactly one of these trading events:
+Each line is a schema v2 envelope with exactly two fields: `record` and `crc32c`.
+`record` contains `version: 2`, a consecutive `sequence` starting at 1, `symbol`,
+`initial_cash` (integer $0.0001 units), and `event`, containing one of:
 
 1. `order_created`: full NEW order
 2. `order_state_changed`: order ID and target status
 3. `fill_applied`: full fill
+
+`crc32c` is an unsigned numeric CRC32C/Castagnoli checksum of `json.Marshal(record)`.
+The fixed Record/Event/domain structs determine field order. All recovery data,
+including version, sequence, account metadata, event type and payload, is covered;
+the checksum field and trailing newline are excluded. Reading first validates
+structure, decodes the typed record, then marshals that same struct layout and
+verifies its checksum before any replay. Whitespace and JSON member order do not
+affect this canonical checksum. CRC detects accidental corruption, not malicious
+modification by someone who can recompute it. Old v1 journals are rejected;
+automatic migration is not implemented.
+
+The journal-local JSON validator requires every envelope, record and event payload
+field, rejects explicit null, duplicate keys (including escaped spellings of the
+same key), unknown fields and case variants. Explicit numeric `initial_cash: 0`
+remains valid. Structure is checked independently of CRC; a recomputed checksum
+cannot make missing/null/duplicate fields acceptable. Any failure returns no
+recovered state.
 
 Account metadata is repeated so recovery requires only the journal. Metadata
 must agree across all records. Empty journals (including runs with no trades)
@@ -303,6 +321,34 @@ rebuilds fill sequences and execution deduplication. `Manager.Get` and `Orders`
 return copies for inspection. A process-termination test persists two orders/fills,
 exits without closing the journal, then recovers cash 997, position 0, equity 997,
 PnL -3 and verifies next IDs `order-3` / `fill-3`.
+
+### Commit-boundary regression tests
+
+Private engine hooks interrupt actual component operations; the public Run API
+and CLI cannot enable them. Tests first commit a BUY at 103 from cash 1000, leaving
+order-1 FILLED, cash 897, one share and remembered fill-1 (four records). A second
+BUY at 104 is interrupted at each boundary. Recovery uses only disk bytes:
+
+- Before NEW or after NEW mutation: second order absent; four records.
+- After NEW sync or SUBMITTED mutation: second order NEW; five records.
+- After SUBMITTED sync, broker fill creation, or portfolio mutation: second order
+  SUBMITTED, second fill absent; six records, cash 897, one share.
+- After fill sync or FILLED mutation: second order SUBMITTED, fill-2 remembered;
+  seven records, cash 793, two shares.
+- After FILLED sync: second order FILLED; eight records, cash 793, two shares.
+
+Cash/holdings remain 897/1 until record seven. Next OrderID is order-2 at four
+records, otherwise order-3; next FillID is fill-2 before seven records, otherwise
+fill-3. Tests check exact orders/fills, retry idempotency, no later quote/order,
+and no successful completion report at every boundary.
+
+At each of the four appends in the second trade, tests model a partial write
+(torn tail, no recovery state), or a complete write followed by Sync failure
+with either the full record surviving or none of its bytes surviving. Only the
+surviving prefix determines recovered state. The internal append hook installs
+these explicit disk fixtures; separate Writer tests inject Write/Sync failures
+and verify writer poisoning and acknowledgement behavior. These are deterministic
+fault simulations, not a claim to reproduce physical power-loss behavior.
 
 No database, snapshots, compaction, strategy recovery, automated resume, concurrent
 writers, or distributed coordination is implemented. Runtime journals are local
