@@ -1,8 +1,8 @@
 # quant-firm-simulation
 
 A Go learning project for trading-system engineering. Currently implements
-Tasks 1–5: a CLI bootstrap with paper-only configuration validation,
-minimal domain contracts, CSV quote replay, a toy strategy, and a pre-trade risk checker.
+Tasks 1–6: a CLI bootstrap with paper-only configuration validation,
+domain contracts, CSV quote replay, a toy strategy, a risk checker, and an in-memory OMS.
 
 ## Requirements
 
@@ -126,6 +126,31 @@ consume resources. The caller supplies the current quote and account snapshot;
 freshness, fees, reservations, and execution integration are deferred.
 No additional domain arithmetic API or money library was needed.
 
+## Order management
+
+`oms.NewManager() *Manager` creates a single-threaded in-memory manager.
+`Create(domain.OrderIntent) (domain.Order, error)` assumes prior risk approval,
+validates the intent and new order, and creates `order-1`, `order-2`, etc. in NEW
+state. Orders copy the intent's ID, symbol, side, quantity, and timestamp.
+The new domain types are `OrderID`, `OrderStatus`, and `Order`; `Order.Validate()`
+and `OrderStatus.Validate()` reject invalid values.
+
+`Transition(domain.OrderID, domain.OrderStatus) (domain.Order, error)` allows:
+
+- NEW -> SUBMITTED or REJECTED
+- SUBMITTED -> CANCELLED or REJECTED
+- Any state -> itself (idempotent success)
+
+Unknown order IDs, unsupported statuses, and other transitions return errors.
+SUBMITTED is a recorded lifecycle state only; no broker submission takes place.
+
+Repeated creation with the same IntentID and payload returns the existing order
+in its current state. A different symbol, side, quantity, or timestamp for that
+ID is rejected without mutation; timestamps are compared as instants.
+Returned orders are copies. IDs are local to the manager run; exhaustion fails
+without wrapping. Invalid requests do not consume IDs or change managed orders.
+There is no persistence, reservation handling, risk recheck, or component wiring.
+
 See [the Phase 1 plan](outputs/phase-1-plan.md) for the implementation order.
-Order management, paper execution, portfolio/PnL,
+Paper execution, portfolio/PnL,
 integration/observability, and journal/recovery are future tasks.
