@@ -376,6 +376,21 @@ Resolve each completely before the next. Execute eligible old orders before a ne
 
 New recorded quote contexts advance monotonically by sequence. The same sequence must have identical quote data; higher sequences cannot have earlier timestamps. Equal timestamps are allowed.
 
+Recovery derives two ordering frontiers from accepted distinct events, initially zero (meaning no context accepted):
+
+- **Highest quote-driven context Q:** the highest quote sequence accepted for a new quote-driven operation. These operations are `order_admitted` and `intent_denied` using `origin_quote.sequence`, `order_submitted` using `quote_sequence`, `fill_applied` using `execution_quote.sequence`, and `order_terminal` with QUOTE context using `context.quote.sequence`, including pre-submission rejection.
+- **Completed-cycle CONTROL frontier C:** the highest `after_quote_sequence` accepted for a new CONTROL operation. A CONTROL operation after K establishes that cycle K has completed and all cycles at or before K are closed to future new quote-driven operations.
+
+The **processing frontier P is max(Q, C)**. It is the furthest cycle evidenced by accepted distinct trading contexts, not a CSV cursor. Q alone does not say that its cycle has completed; C explicitly closes cycles through C.
+
+After structural, integrity, metadata, and identity validation, resolve exact historical duplicates before applying these frontier checks. An exact duplicate returns retained history without a new economic or lifecycle effect and without changing Q or C, even if its original quote sequence is at or before C. Conflicting reuse still fails. Duplicate `order_filled` finalization is likewise a no-op; finalization has no independent quote context and does not advance either frontier.
+
+For a new quote-driven operation at K, require **K >= P and K > C**, in addition to all existing ordering rules. Only after the complete operation passes validation is Q updated to K. Thus multiple operations may occur during the same open quote cycle, but none may newly occur in a cycle already closed by CONTROL.
+
+For a new CONTROL operation after K, require **K >= P**, in addition to all existing lifecycle, resource, and eligible-order rules. Only after the complete operation passes validation is C updated to K; Q is unchanged. Multiple distinct CONTROL operations after the same K are allowed when those rules permit them. A CONTROL context cannot move backward behind either the highest accepted quote-driven context or an earlier completed-cycle CONTROL frontier.
+
+The per-order timing requirement remains **submissionSequence <= K < eligibleSequence** for CONTROL applied to a pending submitted order. This global frontier rule supplements that requirement; it does not replace it. Pending NEW admission and pending FILLED finalization restrictions also remain in force, so CONTROL cannot interrupt those operations.
+
 Before accepting a new context at K:
 
 - No outstanding order may have eligibility less than K.
@@ -383,7 +398,11 @@ Before accepting a new context at K:
 - An execution outcome at K must concern the first unresolved order in the eligible ordering.
 - A CONTROL context after K requires no unresolved order eligible at or before K.
 
+Consequently, quote-driven operations during K precede CONTROL after completion of K; after that CONTROL, a new quote-driven operation must use a sequence greater than K. For example, cancellation after completed quote 2 cannot release cash for a distinct admission originating at quote 2: that admission fails the closed-cycle check before using the released resources. A new operation at quote 3 may proceed if all other rules pass.
+
 A larger sequence may skip quotes that produced no journal event. The trading journal does not prove the content of unrecorded CSV rows or serve as a replay cursor. This is an explicit inspection-only boundary, not permission to skip execution in the live event loop.
+
+Q, C, and P are recovery-only derived validation state. They add no journal fields, require no records for quotes without trading events, and do not authorize simulation resume.
 
 **Delayed execution and price policy**
 
@@ -546,22 +565,32 @@ These are future test requirements, not tests implemented in this ticket.
 | Valid legacy v2 journal | Recover through unchanged Phase 1 semantics; no invented reservation metadata |
 | Unknown version or mixed versions | Fatal |
 | Missing, null, unknown, duplicate, or case-variant field | Fatal, even with recomputed checksum |
+| Escaped duplicate JSON keys that decode to the same member name | Fatal, even with recomputed checksum |
 | Missing BUY reservation field or SELL carrying BUY fields | Fatal |
 | BUY amount inconsistent with reference ask × quantity | Fatal |
 | SELL reserved quantity inconsistent with order quantity | Fatal |
 | Inconsistent run identity, limits, scale, or policy | Fatal |
 | Identical admission retry after release/settlement | Historical result; no new reservation or ordinal |
 | Conflicting IntentID, OrderID, AdmissionID, or ordinal | Fatal |
+| Admission then denial, or denial then admission, for the same IntentID | Fatal; admission and denial identities are mutually exclusive |
 | Submission before admission or changed retry sequence | Fatal |
 | Identical settlement retry, including after `FILLED` | Accounting and release occur once |
 | Conflicting FillID or second distinct Fill for one order | Fatal |
 | Settlement followed by rejection/cancellation | Fatal |
 | Settlement after rejection/cancellation | Fatal |
 | `FILLED` without settlement | Fatal |
+| Exact duplicate `order_filled` finalization | Valid retry; no repeated lifecycle, accounting, or reservation effect |
 | `NEW → CANCELLED` | Fatal |
 | Valid `NEW → REJECTED` | Reservation released, portfolio unchanged |
 | Identical terminal retry | No repeated release |
 | Conflicting terminal reason, context, status, or command identity | Fatal |
+| CONTROL cancellation after K followed by a distinct new admission originating at K | Fatal; released resources cannot fund a decision in the closed cycle |
+| CONTROL cancellation after K followed by a distinct new `intent_denied` originating at K | Fatal; the cycle is closed to new quote-driven decisions |
+| New quote-driven execution outcome at or before the completed-cycle CONTROL frontier | Fatal, including `fill_applied` and QUOTE-context `order_terminal` |
+| CONTROL `after_quote_sequence` below max(highest quote-driven context, completed-cycle CONTROL frontier) | Fatal; test both a newer quote-driven context and a newer CONTROL frontier |
+| Multiple distinct CONTROL operations after the same K | Valid if all lifecycle, resource, per-order timing, and eligible-order rules permit |
+| Exact historical duplicate of an event at or before the closed frontier | Valid retry; retained history, no repeated effect, and no frontier change |
+| New quote-driven event at K+1 after CONTROL closed K | Valid if all other ordering rules pass |
 | Same timestamp at N, N+1, N+2 | Distinct sequences; execute only at N+2 |
 | Execution early, late, or out of eligible-order order | Fatal |
 | BUY cost equal to reservation | Full settlement |
